@@ -1,3 +1,5 @@
+/// <reference types="web-bluetooth" />
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BLE_UUIDS,
@@ -107,7 +109,10 @@ export function useBleCamera() {
   const handleIncoming = useCallback((event: Event) => {
     const target = event.target as BluetoothRemoteGATTCharacteristic;
     if (!target?.value) return;
-    const buffer = target.value.buffer.slice(target.value.byteOffset, target.value.byteOffset + target.value.byteLength);
+    const buffer = target.value.buffer.slice(
+      target.value.byteOffset,
+      target.value.byteOffset + target.value.byteLength,
+    ) as ArrayBuffer;
     const commands = decodeCommands(buffer);
     console.log("[BLE] Incoming configuration chunk", {
       byteLength: buffer.byteLength,
@@ -386,7 +391,7 @@ export function useBleCamera() {
   const sendCommand = useCallback(async (payload: Uint8Array) => {
     const characteristic = refs.current.outgoing;
     if (!characteristic) throw new Error("Not connected to a camera.");
-    await characteristic.writeValueWithResponse?.(payload);
+    await characteristic.writeValueWithResponse?.(payload as unknown as BufferSource);
   }, []);
 
   const wrap = useCallback(
