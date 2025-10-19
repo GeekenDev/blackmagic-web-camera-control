@@ -365,22 +365,30 @@ export default function HomePage() {
             title="Shutter"
             description="Toggle between shutter angle and shutter speed."
           >
-            <div className="button-row">
+            <div className="tabs" role="tablist" aria-label="Shutter measurement">
               <button
+                type="button"
+                role="tab"
+                id="shutter-tab-angle"
+                aria-controls="shutter-panel-angle"
+                aria-selected={state.shutterMeasurement === "angle"}
+                tabIndex={state.shutterMeasurement === "angle" ? 0 : -1}
                 className={
-                  state.shutterMeasurement === "angle"
-                    ? "chip chip--active"
-                    : "chip"
+                  state.shutterMeasurement === "angle" ? "tab tab--active" : "tab"
                 }
                 onClick={() => controls.setShutterAngle(state.shutterAngle)}
               >
                 Angle
               </button>
               <button
+                type="button"
+                role="tab"
+                id="shutter-tab-speed"
+                aria-controls="shutter-panel-speed"
+                aria-selected={state.shutterMeasurement === "speed"}
+                tabIndex={state.shutterMeasurement === "speed" ? 0 : -1}
                 className={
-                  state.shutterMeasurement === "speed"
-                    ? "chip chip--active"
-                    : "chip"
+                  state.shutterMeasurement === "speed" ? "tab tab--active" : "tab"
                 }
                 onClick={() => controls.setShutterSpeed(state.shutterSpeed)}
               >
@@ -389,7 +397,12 @@ export default function HomePage() {
             </div>
 
             {state.shutterMeasurement === "angle" ? (
-              <div className="button-row wrap">
+              <div
+                className="button-row wrap"
+                role="tabpanel"
+                id="shutter-panel-angle"
+                aria-labelledby="shutter-tab-angle"
+              >
                 {state.shutterAngles.map((angle) => (
                   <button
                     key={angle}
@@ -405,7 +418,12 @@ export default function HomePage() {
                 ))}
               </div>
             ) : (
-              <div className="button-row wrap">
+              <div
+                className="button-row wrap"
+                role="tabpanel"
+                id="shutter-panel-speed"
+                aria-labelledby="shutter-tab-speed"
+              >
                 {state.shutterSpeeds.map((speed) => (
                   <button
                     key={speed}
