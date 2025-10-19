@@ -663,7 +663,7 @@ export function useBleCamera() {
       setState((prev) => ({
         ...prev,
         statusMessage:
-          'Web Bluetooth not supported in this browser. If you\'re on an iPhone download Bluefy. &nbsp;<a style="color: #6c8cff; text-decoration: underline;" href="https://apps.apple.com/us/app/bluefy-web-ble-browser/id1492822055">Download here</a>',
+          'Web Bluetooth not supported in this browser. If you\'re on an iPhone you can download Bluefy browser to test. Apple\'s Webkit lacks support for Web Bluetooth API. &nbsp;<a style="color: #6c8cff; text-decoration: underline;" href="https://apps.apple.com/us/app/bluefy-web-ble-browser/id1492822055">Download here</a>',
       }));
       return;
     }
