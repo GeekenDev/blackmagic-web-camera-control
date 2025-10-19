@@ -1,225 +1,312 @@
-export enum CameraDataType {
-  Boolean = 0,
-  Int8 = 1,
-  Int16 = 2,
-  Int32 = 3,
-  Fixed16 = 128,
-}
-
-export enum CameraOperation {
-  Assign = 0,
-  Offset = 1,
-}
-
-export interface CameraControlCommand {
-  destination?: number;
-  category: number;
-  parameter: number;
-  dataType: CameraDataType;
-  operation?: CameraOperation;
-  payload?: Uint8Array;
-}
+import {
+  CAMERA_CONTROL_COMMAND_ID,
+  SdiCategory,
+  SdiDataType,
+  SdiOperation,
+  encodeMessage,
+  decodeMessage,
+  type SdiCommand,
+  type SdiMessageOptions,
+} from "./sdi";
 
 export interface DecodedCameraCommand {
   destination: number;
   category: number;
   parameter: number;
-  dataType: CameraDataType;
-  operation: CameraOperation;
+  dataType: SdiDataType;
+  operation: SdiOperation;
   payload: Uint8Array;
 }
 
-const PADDING = 4;
+export const RecordingFormatFlags = {
+  FileMRate: 0x01,
+  SensorMRate: 0x02,
+  SensorOffSpeed: 0x04,
+  Interlaced: 0x08,
+  WindowedMode: 0x10,
+} as const;
 
-export function encodeCommand(command: CameraControlCommand): Uint8Array {
-  const destination = command.destination ?? 0xff;
-  const payload = command.payload ?? new Uint8Array(0);
+const singleCommand = (command: SdiCommand, options?: SdiMessageOptions): Uint8Array =>
+  encodeMessage([command], { commandId: CAMERA_CONTROL_COMMAND_ID, ...options });
 
-  const commandBytes = new Uint8Array(4 + payload.length);
-  commandBytes[0] = command.category & 0xff;
-  commandBytes[1] = command.parameter & 0xff;
-  commandBytes[2] = command.dataType & 0xff;
-  commandBytes[3] = (command.operation ?? CameraOperation.Assign) & 0xff;
-  commandBytes.set(payload, 4);
-
-  let totalLength = 4 + commandBytes.length;
-  if (totalLength % PADDING !== 0) {
-    totalLength += PADDING - (totalLength % PADDING);
-  }
-
-  const packet = new Uint8Array(totalLength);
-  packet[0] = destination & 0xff;
-  packet[1] = commandBytes.length & 0xff;
-  packet[2] = 0; // command id 0
-  packet[3] = 0; // reserved
-  packet.set(commandBytes, 4);
-
-  return packet;
-}
-
-export function decodeCommands(buffer: ArrayBuffer): DecodedCameraCommand[] {
-  const bytes = new Uint8Array(buffer);
-  const commands: DecodedCameraCommand[] = [];
-  let index = 0;
-
-  while (index + 4 <= bytes.length) {
-    const destination = bytes[index];
-    const length = bytes[index + 1];
-    const commandId = bytes[index + 2];
-    index += 4;
-
-    if (length < 4 || index + length > bytes.length) {
-      break;
-    }
-
-    if (commandId !== 0) {
-      index = align(index + length, PADDING);
-      continue;
-    }
-
-    const segment = bytes.slice(index, index + length);
-    index += length;
-    index = align(index, PADDING);
-
-    commands.push({
-      destination,
-      category: segment[0],
-      parameter: segment[1],
-      dataType: segment[2] as CameraDataType,
-      operation: segment[3] as CameraOperation,
-      payload: segment.slice(4),
-    });
-  }
-
-  return commands;
-}
-
-function align(value: number, multiple: number): number {
-  const remainder = value % multiple;
-  return remainder === 0 ? value : value + multiple - remainder;
-}
-
-/* Convenience builders mirroring the Swift helpers */
-
-function int32Payload(value: number): Uint8Array {
+const fixed16WithDisplayMode = (stop: number, displayModeIndex: number) => {
   const buffer = new ArrayBuffer(4);
-  new DataView(buffer).setInt32(0, value, true);
+  const view = new DataView(buffer);
+  view.setInt16(0, Math.round(stop * 2048), true);
+  view.setInt16(2, displayModeIndex, true);
   return new Uint8Array(buffer);
-}
+};
 
-function int16Payload(value: number): Uint8Array {
-  const buffer = new ArrayBuffer(2);
-  new DataView(buffer).setInt16(0, value, true);
+const packInt16 = (values: number[]) => {
+  const buffer = new ArrayBuffer(values.length * 2);
+  const view = new DataView(buffer);
+  values.forEach((value, index) => {
+    view.setInt16(index * 2, value, true);
+  });
   return new Uint8Array(buffer);
-}
+};
 
-function fixed16Payload(value: number): Uint8Array {
-  const scaled = Math.round(value * 2048);
-  return int16Payload(scaled);
-}
+const toFixed16Bytes = (...values: number[]) =>
+  packInt16(values.map((value) => Math.round(value * 2048)));
 
 export const CameraCommands = {
+  setDynamicRange: (mode: number) =>
+    singleCommand({
+      category: SdiCategory.Video,
+      parameter: 7,
+      dataType: SdiDataType.Int8,
+      value: mode,
+    }),
+  setSharpening: (level: number) =>
+    singleCommand({
+      category: SdiCategory.Video,
+      parameter: 8,
+      dataType: SdiDataType.Int8,
+      value: level,
+    }),
+  setDisplayLut: (index: number, enabled: boolean) =>
+    singleCommand({
+      category: SdiCategory.Video,
+      parameter: 15,
+      dataType: SdiDataType.Int8,
+      value: Uint8Array.from([index & 0xff, enabled ? 1 : 0]),
+    }),
+  setCodec: (codec: number, variant: number) =>
+    singleCommand({
+      category: SdiCategory.Media,
+      parameter: 0,
+      dataType: SdiDataType.Int8,
+      value: Uint8Array.from([codec & 0xff, variant & 0xff]),
+    }),
   setISO: (iso: number) =>
-    encodeCommand({
-      category: 1,
+    singleCommand({
+      category: SdiCategory.Video,
       parameter: 14,
-      dataType: CameraDataType.Int32,
-      payload: int32Payload(iso),
+      dataType: SdiDataType.Int32,
+      value: iso,
     }),
   setShutterAngle: (angle: number) =>
-    encodeCommand({
-      category: 1,
+    singleCommand({
+      category: SdiCategory.Video,
       parameter: 11,
-      dataType: CameraDataType.Int32,
-      payload: int32Payload(Math.round(angle * 100)),
+      dataType: SdiDataType.Int32,
+      value: Math.round(angle * 100),
     }),
   setShutterSpeed: (denominator: number) =>
-    encodeCommand({
-      category: 1,
+    singleCommand({
+      category: SdiCategory.Video,
       parameter: 12,
-      dataType: CameraDataType.Int32,
-      payload: int32Payload(denominator),
+      dataType: SdiDataType.Int32,
+      value: denominator,
     }),
   setGain: (decibels: number) =>
-    encodeCommand({
-      category: 1,
+    singleCommand({
+      category: SdiCategory.Video,
       parameter: 13,
-      dataType: CameraDataType.Int8,
-      payload: new Uint8Array([decibels & 0xff]),
+      dataType: SdiDataType.Int8,
+      value: decibels,
     }),
-  setWhiteBalance: (kelvin: number, tint: number) => {
-    const payload = new Uint8Array(4);
-    payload.set(int16Payload(kelvin));
-    payload.set(int16Payload(tint), 2);
-    return encodeCommand({
-      category: 1,
+  setWhiteBalance: (kelvin: number, tint: number) =>
+    singleCommand({
+      category: SdiCategory.Video,
       parameter: 2,
-      dataType: CameraDataType.Int16,
-      payload,
-    });
-  },
+      dataType: SdiDataType.Int16,
+      value: packInt16([kelvin, tint]),
+    }),
   triggerAutoWhiteBalance: () =>
-    encodeCommand({
-      category: 1,
+    singleCommand({
+      category: SdiCategory.Video,
       parameter: 3,
-      dataType: CameraDataType.Boolean,
-      payload: new Uint8Array([1]),
+      dataType: SdiDataType.Boolean,
+      value: true,
     }),
   restoreAutoWhiteBalance: () =>
-    encodeCommand({
-      category: 1,
+    singleCommand({
+      category: SdiCategory.Video,
       parameter: 4,
-      dataType: CameraDataType.Boolean,
-      payload: new Uint8Array([1]),
+      dataType: SdiDataType.Boolean,
+      value: true,
     }),
   setIris: (value: number) =>
-    encodeCommand({
-      category: 0,
+    singleCommand({
+      category: SdiCategory.Lens,
       parameter: 3,
-      dataType: CameraDataType.Fixed16,
-      payload: fixed16Payload(value),
+      dataType: SdiDataType.Fixed16,
+      value,
     }),
   setFocus: (value: number) =>
-    encodeCommand({
-      category: 0,
+    singleCommand({
+      category: SdiCategory.Lens,
       parameter: 0,
-      dataType: CameraDataType.Fixed16,
-      payload: fixed16Payload(value),
+      dataType: SdiDataType.Fixed16,
+      value,
     }),
   triggerAutoFocus: () =>
-    encodeCommand({
-      category: 0,
+    singleCommand({
+      category: SdiCategory.Lens,
       parameter: 1,
-      dataType: CameraDataType.Boolean,
-      payload: new Uint8Array([1]),
+      dataType: SdiDataType.Boolean,
+      value: true,
     }),
-  setVideoMode: (frameRate: number, mRate: boolean, dimensionCode: number, interlaced: boolean) => {
-    const payload = new Uint8Array([frameRate & 0xff, mRate ? 1 : 0, dimensionCode & 0xff, interlaced ? 1 : 0, 0]);
-    return encodeCommand({
-      category: 1,
+  setVideoMode: (frameRate: number, mRate: boolean, dimensionCode: number, interlaced: boolean) =>
+    singleCommand({
+      category: SdiCategory.Video,
       parameter: 0,
-      dataType: CameraDataType.Int8,
-      payload,
-    });
-  },
-  setNDFilter: (stop: number, displayModeIndex: number) => {
-    const buffer = new Uint8Array(4);
-    buffer.set(fixed16Payload(stop));
-    buffer.set(int16Payload(displayModeIndex), 2);
-    return encodeCommand({
-      category: 1,
-      parameter: 16,
-      dataType: CameraDataType.Fixed16,
-      payload: buffer,
-    });
-  },
-  setRecording: (active: boolean) =>
-    encodeCommand({
-      category: 10,
-      parameter: 1,
-      dataType: CameraDataType.Int8,
-      payload: new Uint8Array([active ? 2 : 0, 0, 0, 0, 0]),
+      dataType: SdiDataType.Int8,
+      value: Uint8Array.from([
+        frameRate & 0xff,
+        mRate ? 1 : 0,
+        dimensionCode & 0xff,
+        interlaced ? 1 : 0,
+        0x00,
+      ]),
     }),
+  setRecordingFormat: (frameRate: number, offSpeedFrameRate: number, width: number, height: number, flags: number) =>
+    singleCommand({
+      category: SdiCategory.Video,
+      parameter: 9,
+      dataType: SdiDataType.Int16,
+      value: packInt16([frameRate, offSpeedFrameRate, width, height, flags]),
+    }),
+  setNDFilter: (stop: number, displayModeIndex: number) =>
+    singleCommand({
+      category: SdiCategory.Video,
+      parameter: 16,
+      dataType: SdiDataType.Fixed16,
+      value: fixed16WithDisplayMode(stop, displayModeIndex),
+    }),
+  setMicLevel: (value: number) =>
+    singleCommand({
+      category: SdiCategory.Audio,
+      parameter: 0,
+      dataType: SdiDataType.Fixed16,
+      value: toFixed16Bytes(value),
+    }),
+  setHeadphoneLevel: (value: number) =>
+    singleCommand({
+      category: SdiCategory.Audio,
+      parameter: 1,
+      dataType: SdiDataType.Fixed16,
+      value: toFixed16Bytes(value),
+    }),
+  setHeadphoneProgramMix: (value: number) =>
+    singleCommand({
+      category: SdiCategory.Audio,
+      parameter: 2,
+      dataType: SdiDataType.Fixed16,
+      value: toFixed16Bytes(value),
+    }),
+  setSpeakerLevel: (value: number) =>
+    singleCommand({
+      category: SdiCategory.Audio,
+      parameter: 3,
+      dataType: SdiDataType.Fixed16,
+      value: toFixed16Bytes(value),
+    }),
+  setAudioInputType: (inputType: number) =>
+    singleCommand({
+      category: SdiCategory.Audio,
+      parameter: 4,
+      dataType: SdiDataType.Int8,
+      value: inputType,
+    }),
+  setAudioInputLevels: (ch0: number, ch1: number) =>
+    singleCommand({
+      category: SdiCategory.Audio,
+      parameter: 5,
+      dataType: SdiDataType.Fixed16,
+      value: toFixed16Bytes(ch0, ch1),
+    }),
+  setPhantomPower: (enabled: boolean) =>
+    singleCommand({
+      category: SdiCategory.Audio,
+      parameter: 6,
+      dataType: SdiDataType.Boolean,
+      value: enabled,
+    }),
+  setDisplayBrightness: (value: number) =>
+    singleCommand({
+      category: SdiCategory.Display,
+      parameter: 0,
+      dataType: SdiDataType.Fixed16,
+      value: toFixed16Bytes(value),
+    }),
+  setZebraLevel: (value: number) =>
+    singleCommand({
+      category: SdiCategory.Display,
+      parameter: 2,
+      dataType: SdiDataType.Fixed16,
+      value: toFixed16Bytes(value),
+    }),
+  setPeakingLevel: (value: number) =>
+    singleCommand({
+      category: SdiCategory.Display,
+      parameter: 3,
+      dataType: SdiDataType.Fixed16,
+      value: toFixed16Bytes(value),
+    }),
+  setColorBars: (timeoutSeconds: number) =>
+    singleCommand({
+      category: SdiCategory.Display,
+      parameter: 4,
+      dataType: SdiDataType.Int8,
+      value: timeoutSeconds,
+    }),
+  setFocusAssist: (method: number, color: number) =>
+    singleCommand({
+      category: SdiCategory.Display,
+      parameter: 5,
+      dataType: SdiDataType.Int8,
+      value: Uint8Array.from([method & 0xff, color & 0xff]),
+    }),
+  setProgramReturnFeed: (timeoutSeconds: number) =>
+    singleCommand({
+      category: SdiCategory.Display,
+      parameter: 6,
+      dataType: SdiDataType.Int8,
+      value: timeoutSeconds,
+    }),
+  setRecording: (active: boolean) =>
+    singleCommand({
+      category: SdiCategory.Media,
+      parameter: 1,
+      dataType: SdiDataType.Int8,
+      value: Uint8Array.from([active ? 2 : 0, 0, 0, 0, 0]),
+    }),
+  setTallyBrightness: (value: number) =>
+    singleCommand({
+      category: SdiCategory.Tally,
+      parameter: 0,
+      dataType: SdiDataType.Fixed16,
+      value: toFixed16Bytes(value),
+    }),
+  setFrontTallyBrightness: (value: number) =>
+    singleCommand({
+      category: SdiCategory.Tally,
+      parameter: 1,
+      dataType: SdiDataType.Fixed16,
+      value: toFixed16Bytes(value),
+    }),
+  setRearTallyBrightness: (value: number) =>
+    singleCommand({
+      category: SdiCategory.Tally,
+      parameter: 2,
+      dataType: SdiDataType.Fixed16,
+      value: toFixed16Bytes(value),
+    }),
+};
+
+export const decodeCommands = (buffer: ArrayBuffer): DecodedCameraCommand[] => {
+  const packet = new Uint8Array(buffer);
+  const message = decodeMessage(packet);
+  return message.commands.map((command) => ({
+    destination: message.destination,
+    category: command.category,
+    parameter: command.parameter,
+    dataType: command.dataType,
+    operation: command.operation,
+    payload: command.valueBytes,
+  }));
 };
 
 export const BLE_UUIDS = {

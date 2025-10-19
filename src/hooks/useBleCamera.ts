@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BLE_UUIDS,
   CameraCommands,
+  RecordingFormatFlags,
   decodeCommands,
 } from "@/lib/cameraControl";
 
@@ -39,6 +40,39 @@ export interface CameraUiState {
   ndStops: number[];
   ndDisplayModeIndex: number;
   recording: boolean;
+  frameRate: number;
+  offSpeedFrameRate: number;
+  offSpeedEnabled: boolean;
+  videoWidth: number;
+  videoHeight: number;
+  recordingFormatFlags: number;
+  mRateEnabled: boolean;
+  interlacedVideo: boolean;
+  dynamicRangeMode: number;
+  sharpeningLevel: number;
+  lutIndex: number;
+  lutEnabled: boolean;
+  micLevel: number;
+  headphoneLevel: number;
+  headphoneMix: number;
+  speakerLevel: number;
+  audioInputType: number;
+  audioInputLevels: [number, number];
+  phantomPower: boolean;
+  displayBrightness: number;
+  zebraLevel: number;
+  peakingLevel: number;
+  focusAssistMethod: number;
+  focusAssistColor: number;
+  programReturnTimeout: number;
+  colorBarsTimeout: number;
+  tallyBrightness: number;
+  frontTallyBrightness: number;
+  rearTallyBrightness: number;
+  codec: number;
+  codecVariant: number;
+  codecBitrateMode: number;
+  sensorWindowed: boolean;
 }
 
 const DEFAULT_STATE: CameraUiState = {
@@ -55,7 +89,7 @@ const DEFAULT_STATE: CameraUiState = {
   tintRange: [-50, 50],
   shutterMeasurement: "angle",
   shutterAngle: 180,
-  shutterAngles: [45, 60, 90, 120, 144, 172.8, 180],
+  shutterAngles: [45, 90, 120, 144, 172.8, 180],
   shutterSpeed: 50,
   shutterSpeeds: [24, 25, 30, 48, 50, 60, 96, 100, 120],
   gain: 0,
@@ -66,6 +100,39 @@ const DEFAULT_STATE: CameraUiState = {
   ndStops: [0, 2, 4, 6],
   ndDisplayModeIndex: 0,
   recording: false,
+  frameRate: 24,
+  offSpeedFrameRate: 24,
+  offSpeedEnabled: false,
+  videoWidth: 1920,
+  videoHeight: 1080,
+  recordingFormatFlags: 0,
+  mRateEnabled: false,
+  interlacedVideo: false,
+  dynamicRangeMode: 0,
+  sharpeningLevel: 0,
+  lutIndex: 0,
+  lutEnabled: false,
+  micLevel: 0.5,
+  headphoneLevel: 0.5,
+  headphoneMix: 0.5,
+  speakerLevel: 0.5,
+  audioInputType: 0,
+  audioInputLevels: [0.5, 0.5],
+  phantomPower: false,
+  displayBrightness: 0.5,
+  zebraLevel: 0.7,
+  peakingLevel: 0.5,
+  focusAssistMethod: 0,
+  focusAssistColor: 0,
+  programReturnTimeout: 0,
+  colorBarsTimeout: 0,
+  tallyBrightness: 0.5,
+  frontTallyBrightness: 0.5,
+  rearTallyBrightness: 0.5,
+  codec: 3,
+  codecVariant: 0,
+  codecBitrateMode: 0,
+  sensorWindowed: false,
 };
 
 interface BleRefs {
@@ -76,6 +143,27 @@ interface BleRefs {
   status?: BluetoothRemoteGATTCharacteristic;
 }
 
+const FIXED16_SCALE = 2048;
+const BRAW_QUALITY_VARIANTS = [0, 1, 7, 8] as const;
+const BRAW_BITRATE_VARIANTS = [2, 3, 4, 5] as const;
+const PRORES_VARIANTS = [0, 1, 2, 3] as const;
+const BRAW_BITRATE_SET = new Set<number>(BRAW_BITRATE_VARIANTS);
+
+const readFixed16 = (payload: Uint8Array, offset = 0): number | null => {
+  if (payload.byteLength < offset + 2) {
+    return null;
+  }
+  const view = new DataView(payload.buffer, payload.byteOffset + offset, 2);
+  return view.getInt16(0, true) / FIXED16_SCALE;
+};
+
+const clamp01 = (value: number) => {
+  if (Number.isNaN(value)) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, value));
+};
+
 export function useBleCamera() {
   const [state, setState] = useState<CameraUiState>(DEFAULT_STATE);
   const [deviceInfo, setDeviceInfo] = useState<BleDeviceInfo>({});
@@ -83,6 +171,7 @@ export function useBleCamera() {
   const gattConnected = useRef(false);
   const lastIncomingLogRef = useRef<{ signature: string; timestamp: number } | null>(null);
   const lastUiLogRef = useRef<{ signature: string; timestamp: number } | null>(null);
+  const incomingBufferRef = useRef<Uint8Array>(new Uint8Array());
 
   const reset = useCallback(() => {
     setState((prev) => ({
@@ -94,6 +183,7 @@ export function useBleCamera() {
     }));
     setDeviceInfo({});
     gattConnected.current = false;
+    incomingBufferRef.current = new Uint8Array();
   }, []);
 
   const disconnect = useCallback(async () => {
@@ -109,22 +199,52 @@ export function useBleCamera() {
   const handleIncoming = useCallback((event: Event) => {
     const target = event.target as BluetoothRemoteGATTCharacteristic;
     if (!target?.value) return;
-    const buffer = target.value.buffer.slice(
+    const chunkBuffer = target.value.buffer.slice(
       target.value.byteOffset,
       target.value.byteOffset + target.value.byteLength,
     ) as ArrayBuffer;
-    const commands = decodeCommands(buffer);
-    console.log("[BLE] Incoming configuration chunk", {
-      byteLength: buffer.byteLength,
-      commandCount: commands.length,
+    const chunk = new Uint8Array(chunkBuffer);
+    let combined = new Uint8Array(incomingBufferRef.current.length + chunk.length);
+    combined.set(incomingBufferRef.current, 0);
+    combined.set(chunk, incomingBufferRef.current.length);
+
+    const packets: Uint8Array[] = [];
+    while (combined.length >= 4) {
+      const payloadLength = combined[1];
+      const totalLength = 4 + payloadLength;
+      if (combined.length < totalLength) {
+        break;
+      }
+      packets.push(combined.slice(0, totalLength));
+      combined = combined.slice(totalLength);
+    }
+
+    incomingBufferRef.current = combined;
+
+    if (packets.length === 0) {
+      return;
+    }
+
+    const totalPacketBytes = packets.reduce((sum, packet) => sum + packet.length, 0);
+    const commands = packets.flatMap((packet) => {
+      const copy = packet.slice();
+      return decodeCommands(copy.buffer);
     });
+
+      console.log("[BLE] Incoming configuration chunk", {
+        byteLength: chunk.byteLength,
+        bufferedBytes: incomingBufferRef.current.length,
+        packets: packets.length,
+        commandCount: commands.length,
+      });
 
     setState((prev) => {
       const next: CameraUiState = { ...prev };
       const connectedMessage = "Connected to camera.";
       const appliedParameters: string[] = [];
       commands.forEach((command) => {
-        switch (`${command.category}-${command.parameter}`) {
+        const key = `${command.category}-${command.parameter}`;
+        switch (key) {
           case "1-14": {
             const view = new DataView(command.payload.buffer, command.payload.byteOffset, command.payload.byteLength);
             next.iso = view.getInt32(0, true);
@@ -140,6 +260,20 @@ export function useBleCamera() {
             if (command.payload.byteLength >= 4) {
               next.tint = view.getInt16(2, true);
               appliedParameters.push("Tint");
+            }
+            break;
+          }
+          case "1-7": {
+            if (command.payload.length >= 1) {
+              next.dynamicRangeMode = command.payload[0];
+              appliedParameters.push("DynamicRange");
+            }
+            break;
+          }
+          case "1-8": {
+            if (command.payload.length >= 1) {
+              next.sharpeningLevel = command.payload[0];
+              appliedParameters.push("Sharpening");
             }
             break;
           }
@@ -162,6 +296,14 @@ export function useBleCamera() {
             appliedParameters.push("Gain");
             break;
           }
+          case "1-15": {
+            if (command.payload.length >= 2) {
+              next.lutIndex = command.payload[0];
+              next.lutEnabled = command.payload[1] !== 0;
+              appliedParameters.push("DisplayLUT");
+            }
+            break;
+          }
           case "1-16": {
             const view = new DataView(command.payload.buffer);
             if (command.payload.byteLength >= 2) {
@@ -172,6 +314,173 @@ export function useBleCamera() {
               const mode = view.getInt16(2, true);
               next.ndDisplayModeIndex = mode;
               appliedParameters.push("NDMode");
+            }
+            break;
+          }
+          case "1-9": {
+            if (command.payload.byteLength >= 10) {
+              const view = new DataView(
+                command.payload.buffer,
+                command.payload.byteOffset,
+                10,
+              );
+              next.frameRate = view.getInt16(0, true);
+              next.offSpeedFrameRate = view.getInt16(2, true);
+              next.videoWidth = view.getInt16(4, true);
+              next.videoHeight = view.getInt16(6, true);
+              const flags = view.getInt16(8, true);
+              next.recordingFormatFlags = flags;
+              next.offSpeedEnabled = (flags & RecordingFormatFlags.SensorOffSpeed) !== 0;
+              next.mRateEnabled = (flags & RecordingFormatFlags.FileMRate) !== 0;
+              next.interlacedVideo = (flags & RecordingFormatFlags.Interlaced) !== 0;
+              next.sensorWindowed = (flags & RecordingFormatFlags.WindowedMode) !== 0;
+              appliedParameters.push("RecordingFormat");
+            }
+            break;
+          }
+          case "10-0": {
+            if (command.payload.length >= 2) {
+              const codec = command.payload[0];
+              const variant = command.payload[1];
+              next.codec = codec;
+              next.codecVariant = variant;
+              if (codec === 3) {
+                if (BRAW_BITRATE_SET.has(variant)) {
+                  next.codecBitrateMode = 1;
+                } else {
+                  next.codecBitrateMode = 0;
+                }
+              } else {
+                next.codecBitrateMode = 0;
+              }
+              appliedParameters.push("Codec");
+            }
+            break;
+          }
+          case "2-0": {
+            const value = readFixed16(command.payload);
+            if (value != null) {
+              next.micLevel = clamp01(value);
+              appliedParameters.push("MicLevel");
+            }
+            break;
+          }
+          case "2-1": {
+            const value = readFixed16(command.payload);
+            if (value != null) {
+              next.headphoneLevel = clamp01(value);
+              appliedParameters.push("HeadphoneLevel");
+            }
+            break;
+          }
+          case "2-2": {
+            const value = readFixed16(command.payload);
+            if (value != null) {
+              next.headphoneMix = clamp01(value);
+              appliedParameters.push("HeadphoneMix");
+            }
+            break;
+          }
+          case "2-3": {
+            const value = readFixed16(command.payload);
+            if (value != null) {
+              next.speakerLevel = clamp01(value);
+              appliedParameters.push("SpeakerLevel");
+            }
+            break;
+          }
+          case "2-4": {
+            if (command.payload.length >= 1) {
+              next.audioInputType = command.payload[0];
+              appliedParameters.push("AudioInputType");
+            }
+            break;
+          }
+          case "2-5": {
+            if (command.payload.length >= 4) {
+              const ch0 = readFixed16(command.payload, 0);
+              const ch1 = readFixed16(command.payload, 2);
+              if (ch0 != null && ch1 != null) {
+                next.audioInputLevels = [clamp01(ch0), clamp01(ch1)];
+                appliedParameters.push("AudioInputLevels");
+              }
+            }
+            break;
+          }
+          case "2-6": {
+            if (command.payload.length >= 1) {
+              next.phantomPower = command.payload[0] !== 0;
+              appliedParameters.push("PhantomPower");
+            }
+            break;
+          }
+          case "4-0": {
+            const value = readFixed16(command.payload);
+            if (value != null) {
+              next.displayBrightness = clamp01(value);
+              appliedParameters.push("DisplayBrightness");
+            }
+            break;
+          }
+          case "4-2": {
+            const value = readFixed16(command.payload);
+            if (value != null) {
+              next.zebraLevel = clamp01(value);
+              appliedParameters.push("ZebraLevel");
+            }
+            break;
+          }
+          case "4-3": {
+            const value = readFixed16(command.payload);
+            if (value != null) {
+              next.peakingLevel = clamp01(value);
+              appliedParameters.push("PeakingLevel");
+            }
+            break;
+          }
+          case "4-4": {
+            if (command.payload.length >= 1) {
+              next.colorBarsTimeout = command.payload[0];
+              appliedParameters.push("ColorBars");
+            }
+            break;
+          }
+          case "4-5": {
+            if (command.payload.length >= 2) {
+              next.focusAssistMethod = command.payload[0];
+              next.focusAssistColor = command.payload[1];
+              appliedParameters.push("FocusAssist");
+            }
+            break;
+          }
+          case "4-6": {
+            if (command.payload.length >= 1) {
+              next.programReturnTimeout = command.payload[0];
+              appliedParameters.push("ProgramReturn");
+            }
+            break;
+          }
+          case "5-0": {
+            const value = readFixed16(command.payload);
+            if (value != null) {
+              next.tallyBrightness = clamp01(value);
+              appliedParameters.push("TallyBrightness");
+            }
+            break;
+          }
+          case "5-1": {
+            const value = readFixed16(command.payload);
+            if (value != null) {
+              next.frontTallyBrightness = clamp01(value);
+              appliedParameters.push("FrontTally");
+            }
+            break;
+          }
+          case "5-2": {
+            const value = readFixed16(command.payload);
+            if (value != null) {
+              next.rearTallyBrightness = clamp01(value);
+              appliedParameters.push("RearTally");
             }
             break;
           }
@@ -210,7 +519,7 @@ export function useBleCamera() {
             return `${command.category}-${command.parameter}:${payloadBytes.join(".")}`;
           })
           .join("|");
-        const signature = `${buffer.byteLength}:${commands.length}:${appliedParameters.join(",")}:${payloadSignature}`;
+        const signature = `${totalPacketBytes}:${commands.length}:${appliedParameters.join(",")}:${payloadSignature}`;
         const now = typeof performance !== "undefined" ? performance.now() : Date.now();
         const lastLog = lastIncomingLogRef.current;
         const isDuplicate = lastLog && lastLog.signature === signature && now - lastLog.timestamp < 10;
@@ -413,6 +722,66 @@ export function useBleCamera() {
   const controls = {
     connect,
     disconnect,
+    setDynamicRange: async (mode: number) => {
+      setState((prev) => ({ ...prev, dynamicRangeMode: mode }));
+      await sendCommand(CameraCommands.setDynamicRange(mode));
+    },
+    setSharpening: async (level: number) => {
+      setState((prev) => ({ ...prev, sharpeningLevel: level }));
+      await sendCommand(CameraCommands.setSharpening(level));
+    },
+    setDisplayLut: async (index: number, enabled: boolean) => {
+      setState((prev) => ({ ...prev, lutIndex: index, lutEnabled: enabled }));
+      await sendCommand(CameraCommands.setDisplayLut(index, enabled));
+    },
+    setCodec: async (codec: number, variant?: number, bitrateMode?: number) => {
+      const targetMode = codec === 3 ? (bitrateMode ?? state.codecBitrateMode ?? 0) : 0;
+      const allowedVariants = codec === 3
+        ? (targetMode === 1 ? BRAW_BITRATE_VARIANTS : BRAW_QUALITY_VARIANTS)
+        : PRORES_VARIANTS;
+      const allowedList = Array.from(allowedVariants) as number[];
+      const candidate = variant ?? state.codecVariant;
+      const nextVariant = allowedList.includes(candidate) ? candidate : allowedList[0];
+
+      setState((prev) => ({
+        ...prev,
+        codec,
+        codecVariant: nextVariant,
+        codecBitrateMode: codec === 3 ? targetMode : 0,
+      }));
+      await sendCommand(CameraCommands.setCodec(codec, nextVariant));
+    },
+    setCodecVariant: async (variant: number) => {
+      let nextMode = state.codecBitrateMode;
+      let allowedVariants: readonly number[];
+      if (state.codec === 3) {
+        nextMode = BRAW_BITRATE_SET.has(variant) ? 1 : 0;
+        allowedVariants = nextMode === 1 ? BRAW_BITRATE_VARIANTS : BRAW_QUALITY_VARIANTS;
+      } else {
+        allowedVariants = PRORES_VARIANTS;
+        nextMode = 0;
+      }
+      const allowedList = Array.from(allowedVariants) as number[];
+      const nextVariant = allowedList.includes(variant) ? variant : allowedList[0];
+      setState((prev) => ({ ...prev, codecVariant: nextVariant, codecBitrateMode: nextMode }));
+      await sendCommand(CameraCommands.setCodec(state.codec, nextVariant));
+    },
+    setCodecBitrateMode: async (mode: number) => {
+      if (state.codec !== 3) {
+        return;
+      }
+      const allowedVariants = mode === 1 ? BRAW_BITRATE_VARIANTS : BRAW_QUALITY_VARIANTS;
+      const allowedList = Array.from(allowedVariants) as number[];
+      const nextVariant = allowedList.includes(state.codecVariant)
+        ? state.codecVariant
+        : allowedList[0];
+      setState((prev) => ({
+        ...prev,
+        codecBitrateMode: mode,
+        codecVariant: nextVariant,
+      }));
+      await sendCommand(CameraCommands.setCodec(state.codec, nextVariant));
+    },
     setISO: async (iso: number) => {
       setState((prev) => ({ ...prev, iso }));
       await sendCommand(CameraCommands.setISO(iso));
@@ -448,8 +817,163 @@ export function useBleCamera() {
     triggerAutoFocus: wrap(() => CameraCommands.triggerAutoFocus()),
     triggerAutoWhiteBalance: wrap(() => CameraCommands.triggerAutoWhiteBalance()),
     restoreAutoWhiteBalance: wrap(() => CameraCommands.restoreAutoWhiteBalance()),
-    setVideoMode: async (frameRate: number, mRate: boolean, dimensionCode: number, interlaced: boolean) => {
+    setMicLevel: async (value: number) => {
+      const clamped = clamp01(value);
+      setState((prev) => ({ ...prev, micLevel: clamped }));
+      await sendCommand(CameraCommands.setMicLevel(clamped));
+    },
+    setHeadphoneLevel: async (value: number) => {
+      const clamped = clamp01(value);
+      setState((prev) => ({ ...prev, headphoneLevel: clamped }));
+      await sendCommand(CameraCommands.setHeadphoneLevel(clamped));
+    },
+    setHeadphoneMix: async (value: number) => {
+      const clamped = clamp01(value);
+      setState((prev) => ({ ...prev, headphoneMix: clamped }));
+      await sendCommand(CameraCommands.setHeadphoneProgramMix(clamped));
+    },
+    setSpeakerLevel: async (value: number) => {
+      const clamped = clamp01(value);
+      setState((prev) => ({ ...prev, speakerLevel: clamped }));
+      await sendCommand(CameraCommands.setSpeakerLevel(clamped));
+    },
+    setAudioInputType: async (inputType: number) => {
+      setState((prev) => ({ ...prev, audioInputType: inputType }));
+      await sendCommand(CameraCommands.setAudioInputType(inputType));
+    },
+    setAudioInputLevel: async (channel: 0 | 1, value: number) => {
+      const clamped = clamp01(value);
+      const currentLevels: [number, number] = [...state.audioInputLevels] as [number, number];
+      currentLevels[channel] = clamped;
+      setState((prev) => ({ ...prev, audioInputLevels: currentLevels }));
+      await sendCommand(CameraCommands.setAudioInputLevels(currentLevels[0], currentLevels[1]));
+    },
+    setPhantomPower: async (enabled: boolean) => {
+      setState((prev) => ({ ...prev, phantomPower: enabled }));
+      await sendCommand(CameraCommands.setPhantomPower(enabled));
+    },
+    setDisplayBrightness: async (value: number) => {
+      const clamped = clamp01(value);
+      setState((prev) => ({ ...prev, displayBrightness: clamped }));
+      await sendCommand(CameraCommands.setDisplayBrightness(clamped));
+    },
+    setZebraLevel: async (value: number) => {
+      const clamped = clamp01(value);
+      setState((prev) => ({ ...prev, zebraLevel: clamped }));
+      await sendCommand(CameraCommands.setZebraLevel(clamped));
+    },
+    setPeakingLevel: async (value: number) => {
+      const clamped = clamp01(value);
+      setState((prev) => ({ ...prev, peakingLevel: clamped }));
+      await sendCommand(CameraCommands.setPeakingLevel(clamped));
+    },
+    setFocusAssist: async (method: number, color: number) => {
+      setState((prev) => ({ ...prev, focusAssistMethod: method, focusAssistColor: color }));
+      await sendCommand(CameraCommands.setFocusAssist(method, color));
+    },
+    setProgramReturnTimeout: async (timeout: number) => {
+      const clamped = Math.max(0, Math.min(30, Math.round(timeout)));
+      setState((prev) => ({ ...prev, programReturnTimeout: clamped }));
+      await sendCommand(CameraCommands.setProgramReturnFeed(clamped));
+    },
+    setColorBarsTimeout: async (timeout: number) => {
+      const clamped = Math.max(0, Math.min(30, Math.round(timeout)));
+      setState((prev) => ({ ...prev, colorBarsTimeout: clamped }));
+      await sendCommand(CameraCommands.setColorBars(clamped));
+    },
+    setTallyBrightness: async (value: number) => {
+      const clamped = clamp01(value);
+      setState((prev) => ({ ...prev, tallyBrightness: clamped }));
+      await sendCommand(CameraCommands.setTallyBrightness(clamped));
+    },
+    setFrontTallyBrightness: async (value: number) => {
+      const clamped = clamp01(value);
+      setState((prev) => ({ ...prev, frontTallyBrightness: clamped }));
+      await sendCommand(CameraCommands.setFrontTallyBrightness(clamped));
+    },
+    setRearTallyBrightness: async (value: number) => {
+      const clamped = clamp01(value);
+      setState((prev) => ({ ...prev, rearTallyBrightness: clamped }));
+      await sendCommand(CameraCommands.setRearTallyBrightness(clamped));
+    },
+    setVideoMode: async (
+      frameRate: number,
+      mRate: boolean,
+      dimensionCode: number,
+      interlaced: boolean,
+      width?: number,
+      height?: number,
+    ) => {
+      const clampInt16 = (value: number) => {
+        if (Number.isNaN(value)) return 0;
+        return Math.max(0, Math.min(0x7fff, Math.round(value)));
+      };
+      const widthToSend = clampInt16(width ?? state.videoWidth ?? 0);
+      const heightToSend = clampInt16(height ?? state.videoHeight ?? 0);
+      const sensorFrameRate = 0; // disable off-speed when setting base FPS
+
+      let flags = 0;
+      if (mRate) {
+        flags |= RecordingFormatFlags.FileMRate;
+      }
+      if (interlaced) {
+        flags |= RecordingFormatFlags.Interlaced;
+      }
+      if (state.sensorWindowed) {
+        flags |= RecordingFormatFlags.WindowedMode;
+      }
+
+      setState((prev) => ({
+        ...prev,
+        frameRate,
+        offSpeedFrameRate: sensorFrameRate,
+        videoWidth: widthToSend,
+        videoHeight: heightToSend,
+        recordingFormatFlags: flags,
+        offSpeedEnabled: false,
+        mRateEnabled: mRate,
+        interlacedVideo: interlaced,
+      }));
+      console.log("[BLE] Sending video mode command", {
+        frameRate,
+        mRate,
+        dimensionCode,
+        interlaced,
+      });
       await sendCommand(CameraCommands.setVideoMode(frameRate, mRate, dimensionCode, interlaced));
+      await sendCommand(
+        CameraCommands.setRecordingFormat(
+          frameRate,
+          sensorFrameRate,
+          widthToSend,
+          heightToSend,
+          flags,
+        ),
+      );
+    },
+    setSensorWindowed: async (enabled: boolean) => {
+      let flags = state.recordingFormatFlags;
+      if (enabled) {
+        flags |= RecordingFormatFlags.WindowedMode;
+      } else {
+        flags &= ~RecordingFormatFlags.WindowedMode;
+      }
+
+      setState((prev) => ({
+        ...prev,
+        sensorWindowed: enabled,
+        recordingFormatFlags: flags,
+      }));
+
+      await sendCommand(
+        CameraCommands.setRecordingFormat(
+          state.frameRate,
+          state.offSpeedFrameRate,
+          state.videoWidth,
+          state.videoHeight,
+          flags,
+        ),
+      );
     },
     setNDFilter: async (stop: number, displayModeIndex: number) => {
       setState((prev) => ({ ...prev, ndStop: stop, ndDisplayModeIndex: displayModeIndex }));
