@@ -79,6 +79,8 @@ export function useBleCamera() {
   const [deviceInfo, setDeviceInfo] = useState<BleDeviceInfo>({});
   const refs = useRef<BleRefs>({});
   const gattConnected = useRef(false);
+  const lastIncomingLogRef = useRef<{ signature: string; timestamp: number } | null>(null);
+  const lastUiLogRef = useRef<{ signature: string; timestamp: number } | null>(null);
 
   const reset = useCallback(() => {
     setState((prev) => ({
@@ -197,7 +199,20 @@ export function useBleCamera() {
         next.loading = false;
         console.log("[BLE] Initial camera configuration sync complete.");
       } else if (appliedParameters.length > 0) {
-        console.log("[BLE] Applied configuration parameters", appliedParameters);
+        const payloadSignature = commands
+          .map((command) => {
+            const payloadBytes = Array.from(command.payload);
+            return `${command.category}-${command.parameter}:${payloadBytes.join(".")}`;
+          })
+          .join("|");
+        const signature = `${buffer.byteLength}:${commands.length}:${appliedParameters.join(",")}:${payloadSignature}`;
+        const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+        const lastLog = lastIncomingLogRef.current;
+        const isDuplicate = lastLog && lastLog.signature === signature && now - lastLog.timestamp < 10;
+        if (!isDuplicate) {
+          console.log("[BLE] Applied configuration parameters", appliedParameters);
+          lastIncomingLogRef.current = { signature, timestamp: now };
+        }
       }
       return {
         ...next,
@@ -253,14 +268,21 @@ export function useBleCamera() {
         shouldShowLoading !== prev.loading ||
         nextReady !== prev.ready
       ) {
-        console.log("[BLE] UI link state", {
-          connection: nextConnection,
-          statusMessage,
-          loading: shouldShowLoading,
-          ready: nextReady,
-          initialSyncComplete: prev.initialSyncComplete,
-          encrypted,
-        });
+        const signature = `${nextConnection}|${statusMessage}|${shouldShowLoading}|${nextReady}|${prev.initialSyncComplete}|${encrypted}`;
+        const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+        const lastLog = lastUiLogRef.current;
+        const isDuplicate = lastLog && lastLog.signature === signature && now - lastLog.timestamp < 10;
+        if (!isDuplicate) {
+          console.log("[BLE] UI link state", {
+            connection: nextConnection,
+            statusMessage,
+            loading: shouldShowLoading,
+            ready: nextReady,
+            initialSyncComplete: prev.initialSyncComplete,
+            encrypted,
+          });
+          lastUiLogRef.current = { signature, timestamp: now };
+        }
       }
 
       return {
