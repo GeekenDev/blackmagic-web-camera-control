@@ -1,36 +1,32 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## Blackmagic Camera Control (Web)
+
+This Next.js application mirrors the SwiftUI macOS controller, enabling live camera control straight from a Web Bluetooth–capable browser (Chrome, Edge, or other Chromium builds).
+
+> **Note:** Web Bluetooth only works in secure contexts (`https://` or `http://localhost`) and requires explicit user permission for each connection.
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+npm install    # already executed by scaffolding, repeat if needed
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in a Chromium browser. When prompted, select the camera that advertises the Blackmagic Camera Service (`291D567A-6D75-11E6-8B77-86F30CA893D3`).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Features
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **Pair & Connect:** Requests a BLE device, subscribes to `Incoming Camera Control` and `Camera Status`, and writes commands via `Outgoing Camera Control`.
+- **Transport & ISO:** Toggle record/stop, adjust ISO and gain presets.
+- **Imaging Controls:** White balance (with presets, auto/restore), tint, shutter angle/speed, iris, focus (with auto focus trigger), ND filter stop and display mode, video mode CCU command.
+- **State Sync:** Incoming CCU packets update the UI so local state follows changes made on the camera body.
 
-## Learn More
+## Browser Support
 
-To learn more about Next.js, take a look at the following resources:
+- Chromium-based browsers on macOS, Windows, and Android.  
+- Web Bluetooth is not available in Safari or Firefox at the time of writing.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Extending
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- BLE helpers live in `src/lib/cameraControl.ts`. Add new CCU commands here to keep encoding/decoding consistent with the Swift implementation.
+- `src/hooks/useBleCamera.ts` centralises connection logic and UI state. Extend this hook for additional controls (e.g. audio, monitoring, slate once exposed over BLE).
+- The UI is defined in `src/app/page.tsx` using client components; augment this page or break the controls into smaller components as the surface grows.
