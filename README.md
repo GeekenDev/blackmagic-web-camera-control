@@ -1,6 +1,6 @@
 ## Blackmagic Camera Control (Web)
 
-This Next.js application mirrors the SwiftUI macOS controller, enabling live camera control straight from a Web Bluetooth–capable browser (Chrome, Edge, or other Chromium builds).
+This application enables live camera control straight from a Web Bluetooth–capable browser (Chrome, Edge, or other Chromium builds).
 
 > **Note:** Web Bluetooth only works in secure contexts (`https://` or `http://localhost`) and requires explicit user permission for each connection.
 
@@ -22,7 +22,7 @@ Open [http://localhost:3000](http://localhost:3000) in a Chromium browser. When 
 
 ## Browser Support
 
-- Chromium-based browsers on macOS, Windows, and Android.  
+- Chromium-based browsers on macOS, Windows, and Android.
 - Web Bluetooth is not available in Safari or Firefox at the time of writing.
 
 ## Extending
