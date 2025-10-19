@@ -238,7 +238,13 @@ export default function HomePage() {
 
         <div className="card__body">
           <p data-testid="status-message">
-            {state.statusMessage ?? "Ready to connect to a camera."}
+            {state.statusMessage ? (
+              <span
+                dangerouslySetInnerHTML={{ __html: state.statusMessage }}
+              />
+            ) : (
+              "Ready to connect to a camera."
+            )}
           </p>
 
           <div className="button-row">

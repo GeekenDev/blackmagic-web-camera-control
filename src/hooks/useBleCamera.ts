@@ -169,15 +169,21 @@ export function useBleCamera() {
   const [deviceInfo, setDeviceInfo] = useState<BleDeviceInfo>({});
   const refs = useRef<BleRefs>({});
   const gattConnected = useRef(false);
-  const lastIncomingLogRef = useRef<{ signature: string; timestamp: number } | null>(null);
-  const lastUiLogRef = useRef<{ signature: string; timestamp: number } | null>(null);
+  const lastIncomingLogRef = useRef<{
+    signature: string;
+    timestamp: number;
+  } | null>(null);
+  const lastUiLogRef = useRef<{ signature: string; timestamp: number } | null>(
+    null
+  );
   const incomingBufferRef = useRef<Uint8Array>(new Uint8Array());
 
   const reset = useCallback(() => {
     setState((prev) => ({
       ...DEFAULT_STATE,
       connection: "disconnected",
-      statusMessage: prev.connection === "connected" ? "Disconnected." : prev.statusMessage,
+      statusMessage:
+        prev.connection === "connected" ? "Disconnected." : prev.statusMessage,
       ready: false,
       loading: false,
     }));
@@ -201,10 +207,12 @@ export function useBleCamera() {
     if (!target?.value) return;
     const chunkBuffer = target.value.buffer.slice(
       target.value.byteOffset,
-      target.value.byteOffset + target.value.byteLength,
+      target.value.byteOffset + target.value.byteLength
     ) as ArrayBuffer;
     const chunk = new Uint8Array(chunkBuffer);
-    let combined = new Uint8Array(incomingBufferRef.current.length + chunk.length);
+    let combined = new Uint8Array(
+      incomingBufferRef.current.length + chunk.length
+    );
     combined.set(incomingBufferRef.current, 0);
     combined.set(chunk, incomingBufferRef.current.length);
 
@@ -225,18 +233,21 @@ export function useBleCamera() {
       return;
     }
 
-    const totalPacketBytes = packets.reduce((sum, packet) => sum + packet.length, 0);
+    const totalPacketBytes = packets.reduce(
+      (sum, packet) => sum + packet.length,
+      0
+    );
     const commands = packets.flatMap((packet) => {
       const copy = packet.slice();
       return decodeCommands(copy.buffer);
     });
 
-      console.log("[BLE] Incoming configuration chunk", {
-        byteLength: chunk.byteLength,
-        bufferedBytes: incomingBufferRef.current.length,
-        packets: packets.length,
-        commandCount: commands.length,
-      });
+    console.log("[BLE] Incoming configuration chunk", {
+      byteLength: chunk.byteLength,
+      bufferedBytes: incomingBufferRef.current.length,
+      packets: packets.length,
+      commandCount: commands.length,
+    });
 
     setState((prev) => {
       const next: CameraUiState = { ...prev };
@@ -246,13 +257,21 @@ export function useBleCamera() {
         const key = `${command.category}-${command.parameter}`;
         switch (key) {
           case "1-14": {
-            const view = new DataView(command.payload.buffer, command.payload.byteOffset, command.payload.byteLength);
+            const view = new DataView(
+              command.payload.buffer,
+              command.payload.byteOffset,
+              command.payload.byteLength
+            );
             next.iso = view.getInt32(0, true);
             appliedParameters.push("ISO");
             break;
           }
           case "1-2": {
-            const view = new DataView(command.payload.buffer, command.payload.byteOffset, command.payload.byteLength);
+            const view = new DataView(
+              command.payload.buffer,
+              command.payload.byteOffset,
+              command.payload.byteLength
+            );
             if (command.payload.byteLength >= 2) {
               next.whiteBalance = view.getInt16(0, true);
               appliedParameters.push("WhiteBalance");
@@ -322,7 +341,7 @@ export function useBleCamera() {
               const view = new DataView(
                 command.payload.buffer,
                 command.payload.byteOffset,
-                10,
+                10
               );
               next.frameRate = view.getInt16(0, true);
               next.offSpeedFrameRate = view.getInt16(2, true);
@@ -330,10 +349,14 @@ export function useBleCamera() {
               next.videoHeight = view.getInt16(6, true);
               const flags = view.getInt16(8, true);
               next.recordingFormatFlags = flags;
-              next.offSpeedEnabled = (flags & RecordingFormatFlags.SensorOffSpeed) !== 0;
-              next.mRateEnabled = (flags & RecordingFormatFlags.FileMRate) !== 0;
-              next.interlacedVideo = (flags & RecordingFormatFlags.Interlaced) !== 0;
-              next.sensorWindowed = (flags & RecordingFormatFlags.WindowedMode) !== 0;
+              next.offSpeedEnabled =
+                (flags & RecordingFormatFlags.SensorOffSpeed) !== 0;
+              next.mRateEnabled =
+                (flags & RecordingFormatFlags.FileMRate) !== 0;
+              next.interlacedVideo =
+                (flags & RecordingFormatFlags.Interlaced) !== 0;
+              next.sensorWindowed =
+                (flags & RecordingFormatFlags.WindowedMode) !== 0;
               appliedParameters.push("RecordingFormat");
             }
             break;
@@ -507,7 +530,8 @@ export function useBleCamera() {
         }
       });
       const nextInitialSync = prev.initialSyncComplete || commands.length > 0;
-      const shouldFinalizeReady = prev.ready && !prev.initialSyncComplete && nextInitialSync;
+      const shouldFinalizeReady =
+        prev.ready && !prev.initialSyncComplete && nextInitialSync;
       if (shouldFinalizeReady) {
         next.statusMessage = connectedMessage;
         next.loading = false;
@@ -516,15 +540,26 @@ export function useBleCamera() {
         const payloadSignature = commands
           .map((command) => {
             const payloadBytes = Array.from(command.payload);
-            return `${command.category}-${command.parameter}:${payloadBytes.join(".")}`;
+            return `${command.category}-${
+              command.parameter
+            }:${payloadBytes.join(".")}`;
           })
           .join("|");
-        const signature = `${totalPacketBytes}:${commands.length}:${appliedParameters.join(",")}:${payloadSignature}`;
-        const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+        const signature = `${totalPacketBytes}:${
+          commands.length
+        }:${appliedParameters.join(",")}:${payloadSignature}`;
+        const now =
+          typeof performance !== "undefined" ? performance.now() : Date.now();
         const lastLog = lastIncomingLogRef.current;
-        const isDuplicate = lastLog && lastLog.signature === signature && now - lastLog.timestamp < 10;
+        const isDuplicate =
+          lastLog &&
+          lastLog.signature === signature &&
+          now - lastLog.timestamp < 10;
         if (!isDuplicate) {
-          console.log("[BLE] Applied configuration parameters", appliedParameters);
+          console.log(
+            "[BLE] Applied configuration parameters",
+            appliedParameters
+          );
           lastIncomingLogRef.current = { signature, timestamp: now };
         }
       }
@@ -547,7 +582,12 @@ export function useBleCamera() {
     const paired = (statusByte & 0x01) !== 0;
     const ready = (statusByte & 0x02) !== 0;
     const encrypted = (statusByte & 0x04) !== 0;
-    console.log("[BLE] Status characteristic update", { statusByte, paired, ready, encrypted });
+    console.log("[BLE] Status characteristic update", {
+      statusByte,
+      paired,
+      ready,
+      encrypted,
+    });
     setState((prev) => {
       const nextReady = ready ? true : prev.ready;
       const waitingMessage = "Connected. Waiting for camera status…";
@@ -565,10 +605,15 @@ export function useBleCamera() {
         statusMessage = connectedMessage;
       } else if (nextReady) {
         statusMessage = waitingMessage;
-      } else if (prev.connection === "connected" || prev.statusMessage === waitingMessage) {
+      } else if (
+        prev.connection === "connected" ||
+        prev.statusMessage === waitingMessage
+      ) {
         statusMessage = waitingMessage;
       } else if (paired || gattConnected.current) {
-        statusMessage = encrypted ? "Establishing encrypted session…" : "Connecting to camera…";
+        statusMessage = encrypted
+          ? "Establishing encrypted session…"
+          : "Connecting to camera…";
       } else {
         statusMessage = "Confirm the Bluetooth pairing code on the camera.";
       }
@@ -583,9 +628,13 @@ export function useBleCamera() {
         nextReady !== prev.ready
       ) {
         const signature = `${nextConnection}|${statusMessage}|${shouldShowLoading}|${nextReady}|${prev.initialSyncComplete}|${encrypted}`;
-        const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+        const now =
+          typeof performance !== "undefined" ? performance.now() : Date.now();
         const lastLog = lastUiLogRef.current;
-        const isDuplicate = lastLog && lastLog.signature === signature && now - lastLog.timestamp < 10;
+        const isDuplicate =
+          lastLog &&
+          lastLog.signature === signature &&
+          now - lastLog.timestamp < 10;
         if (!isDuplicate) {
           console.log("[BLE] UI link state", {
             connection: nextConnection,
@@ -611,7 +660,11 @@ export function useBleCamera() {
 
   const connect = useCallback(async () => {
     if (!navigator.bluetooth) {
-      setState((prev) => ({ ...prev, statusMessage: "Web Bluetooth not supported in this browser." }));
+      setState((prev) => ({
+        ...prev,
+        statusMessage:
+          'Web Bluetooth not supported in this browser. If you\'re on an iPhone download Bluefy. &nbsp;<a style="color: #6c8cff; text-decoration: underline;" href="https://apps.apple.com/us/app/bluefy-web-ble-browser/id1492822055">Download here</a>',
+      }));
       return;
     }
 
@@ -627,9 +680,15 @@ export function useBleCamera() {
       }));
       const device = await navigator.bluetooth.requestDevice({
         filters: [{ services: [BLE_UUIDS.cameraService] }],
-        optionalServices: [BLE_UUIDS.cameraService, BLE_UUIDS.deviceInformationService],
+        optionalServices: [
+          BLE_UUIDS.cameraService,
+          BLE_UUIDS.deviceInformationService,
+        ],
       });
-      console.log("[BLE] Device selected", { name: device.name, id: device.id });
+      console.log("[BLE] Device selected", {
+        name: device.name,
+        id: device.id,
+      });
       refs.current.device = device;
 
       device.addEventListener("gattserverdisconnected", disconnect);
@@ -640,8 +699,12 @@ export function useBleCamera() {
       refs.current.server = server;
 
       const service = await server.getPrimaryService(BLE_UUIDS.cameraService);
-      const outgoing = await service.getCharacteristic(BLE_UUIDS.outgoingControl);
-      const incoming = await service.getCharacteristic(BLE_UUIDS.incomingControl);
+      const outgoing = await service.getCharacteristic(
+        BLE_UUIDS.outgoingControl
+      );
+      const incoming = await service.getCharacteristic(
+        BLE_UUIDS.incomingControl
+      );
       const status = await service.getCharacteristic(BLE_UUIDS.cameraStatus);
       console.log("[BLE] Camera service characteristics resolved.");
 
@@ -657,14 +720,25 @@ export function useBleCamera() {
       await status.startNotifications();
       const statusValue = await status.readValue();
       console.log("[BLE] Initial status value read.");
-      handleStatus(new CustomEvent("camera-status", { detail: statusValue } as CustomEventInit<DataView>))
+      handleStatus(
+        new CustomEvent("camera-status", {
+          detail: statusValue,
+        } as CustomEventInit<DataView>)
+      );
 
       // Device info
       try {
-        const info = await server.getPrimaryService(BLE_UUIDS.deviceInformationService);
-        const manufacturer = await info.getCharacteristic(BLE_UUIDS.manufacturer);
+        const info = await server.getPrimaryService(
+          BLE_UUIDS.deviceInformationService
+        );
+        const manufacturer = await info.getCharacteristic(
+          BLE_UUIDS.manufacturer
+        );
         const model = await info.getCharacteristic(BLE_UUIDS.model);
-        const [manufacturerValue, modelValue] = await Promise.all([manufacturer.readValue(), model.readValue()]);
+        const [manufacturerValue, modelValue] = await Promise.all([
+          manufacturer.readValue(),
+          model.readValue(),
+        ]);
         setDeviceInfo({
           manufacturer: decoder.decode(manufacturerValue),
           model: decoder.decode(modelValue),
@@ -688,7 +762,8 @@ export function useBleCamera() {
       setState((prev) => ({
         ...prev,
         connection: "disconnected",
-        statusMessage: error instanceof Error ? error.message : "Failed to connect.",
+        statusMessage:
+          error instanceof Error ? error.message : "Failed to connect.",
         ready: false,
         loading: false,
         initialSyncComplete: false,
@@ -700,23 +775,27 @@ export function useBleCamera() {
   const sendCommand = useCallback(async (payload: Uint8Array) => {
     const characteristic = refs.current.outgoing;
     if (!characteristic) throw new Error("Not connected to a camera.");
-    await characteristic.writeValueWithResponse?.(payload as unknown as BufferSource);
+    await characteristic.writeValueWithResponse?.(
+      payload as unknown as BufferSource
+    );
   }, []);
 
   const wrap = useCallback(
-    (fn: (state: CameraUiState) => Uint8Array | Promise<Uint8Array>) => async () => {
-      try {
-        const result = await fn(state);
-        await sendCommand(result);
-      } catch (error: unknown) {
-        console.error(error);
-        setState((prev) => ({
-          ...prev,
-          statusMessage: error instanceof Error ? error.message : "Unexpected error",
-        }));
-      }
-    },
-    [sendCommand, state],
+    (fn: (state: CameraUiState) => Uint8Array | Promise<Uint8Array>) =>
+      async () => {
+        try {
+          const result = await fn(state);
+          await sendCommand(result);
+        } catch (error: unknown) {
+          console.error(error);
+          setState((prev) => ({
+            ...prev,
+            statusMessage:
+              error instanceof Error ? error.message : "Unexpected error",
+          }));
+        }
+      },
+    [sendCommand, state]
   );
 
   const controls = {
@@ -735,13 +814,19 @@ export function useBleCamera() {
       await sendCommand(CameraCommands.setDisplayLut(index, enabled));
     },
     setCodec: async (codec: number, variant?: number, bitrateMode?: number) => {
-      const targetMode = codec === 3 ? (bitrateMode ?? state.codecBitrateMode ?? 0) : 0;
-      const allowedVariants = codec === 3
-        ? (targetMode === 1 ? BRAW_BITRATE_VARIANTS : BRAW_QUALITY_VARIANTS)
-        : PRORES_VARIANTS;
+      const targetMode =
+        codec === 3 ? bitrateMode ?? state.codecBitrateMode ?? 0 : 0;
+      const allowedVariants =
+        codec === 3
+          ? targetMode === 1
+            ? BRAW_BITRATE_VARIANTS
+            : BRAW_QUALITY_VARIANTS
+          : PRORES_VARIANTS;
       const allowedList = Array.from(allowedVariants) as number[];
       const candidate = variant ?? state.codecVariant;
-      const nextVariant = allowedList.includes(candidate) ? candidate : allowedList[0];
+      const nextVariant = allowedList.includes(candidate)
+        ? candidate
+        : allowedList[0];
 
       setState((prev) => ({
         ...prev,
@@ -756,21 +841,29 @@ export function useBleCamera() {
       let allowedVariants: readonly number[];
       if (state.codec === 3) {
         nextMode = BRAW_BITRATE_SET.has(variant) ? 1 : 0;
-        allowedVariants = nextMode === 1 ? BRAW_BITRATE_VARIANTS : BRAW_QUALITY_VARIANTS;
+        allowedVariants =
+          nextMode === 1 ? BRAW_BITRATE_VARIANTS : BRAW_QUALITY_VARIANTS;
       } else {
         allowedVariants = PRORES_VARIANTS;
         nextMode = 0;
       }
       const allowedList = Array.from(allowedVariants) as number[];
-      const nextVariant = allowedList.includes(variant) ? variant : allowedList[0];
-      setState((prev) => ({ ...prev, codecVariant: nextVariant, codecBitrateMode: nextMode }));
+      const nextVariant = allowedList.includes(variant)
+        ? variant
+        : allowedList[0];
+      setState((prev) => ({
+        ...prev,
+        codecVariant: nextVariant,
+        codecBitrateMode: nextMode,
+      }));
       await sendCommand(CameraCommands.setCodec(state.codec, nextVariant));
     },
     setCodecBitrateMode: async (mode: number) => {
       if (state.codec !== 3) {
         return;
       }
-      const allowedVariants = mode === 1 ? BRAW_BITRATE_VARIANTS : BRAW_QUALITY_VARIANTS;
+      const allowedVariants =
+        mode === 1 ? BRAW_BITRATE_VARIANTS : BRAW_QUALITY_VARIANTS;
       const allowedList = Array.from(allowedVariants) as number[];
       const nextVariant = allowedList.includes(state.codecVariant)
         ? state.codecVariant
@@ -792,14 +885,24 @@ export function useBleCamera() {
     },
     setTint: async (tint: number) => {
       setState((prev) => ({ ...prev, tint }));
-      await sendCommand(CameraCommands.setWhiteBalance(state.whiteBalance, tint));
+      await sendCommand(
+        CameraCommands.setWhiteBalance(state.whiteBalance, tint)
+      );
     },
     setShutterAngle: async (angle: number) => {
-      setState((prev) => ({ ...prev, shutterAngle: angle, shutterMeasurement: "angle" }));
+      setState((prev) => ({
+        ...prev,
+        shutterAngle: angle,
+        shutterMeasurement: "angle",
+      }));
       await sendCommand(CameraCommands.setShutterAngle(angle));
     },
     setShutterSpeed: async (speed: number) => {
-      setState((prev) => ({ ...prev, shutterSpeed: speed, shutterMeasurement: "speed" }));
+      setState((prev) => ({
+        ...prev,
+        shutterSpeed: speed,
+        shutterMeasurement: "speed",
+      }));
       await sendCommand(CameraCommands.setShutterSpeed(speed));
     },
     setGain: async (gain: number) => {
@@ -815,8 +918,12 @@ export function useBleCamera() {
       await sendCommand(CameraCommands.setFocus(value));
     },
     triggerAutoFocus: wrap(() => CameraCommands.triggerAutoFocus()),
-    triggerAutoWhiteBalance: wrap(() => CameraCommands.triggerAutoWhiteBalance()),
-    restoreAutoWhiteBalance: wrap(() => CameraCommands.restoreAutoWhiteBalance()),
+    triggerAutoWhiteBalance: wrap(() =>
+      CameraCommands.triggerAutoWhiteBalance()
+    ),
+    restoreAutoWhiteBalance: wrap(() =>
+      CameraCommands.restoreAutoWhiteBalance()
+    ),
     setMicLevel: async (value: number) => {
       const clamped = clamp01(value);
       setState((prev) => ({ ...prev, micLevel: clamped }));
@@ -843,10 +950,15 @@ export function useBleCamera() {
     },
     setAudioInputLevel: async (channel: 0 | 1, value: number) => {
       const clamped = clamp01(value);
-      const currentLevels: [number, number] = [...state.audioInputLevels] as [number, number];
+      const currentLevels: [number, number] = [...state.audioInputLevels] as [
+        number,
+        number
+      ];
       currentLevels[channel] = clamped;
       setState((prev) => ({ ...prev, audioInputLevels: currentLevels }));
-      await sendCommand(CameraCommands.setAudioInputLevels(currentLevels[0], currentLevels[1]));
+      await sendCommand(
+        CameraCommands.setAudioInputLevels(currentLevels[0], currentLevels[1])
+      );
     },
     setPhantomPower: async (enabled: boolean) => {
       setState((prev) => ({ ...prev, phantomPower: enabled }));
@@ -868,7 +980,11 @@ export function useBleCamera() {
       await sendCommand(CameraCommands.setPeakingLevel(clamped));
     },
     setFocusAssist: async (method: number, color: number) => {
-      setState((prev) => ({ ...prev, focusAssistMethod: method, focusAssistColor: color }));
+      setState((prev) => ({
+        ...prev,
+        focusAssistMethod: method,
+        focusAssistColor: color,
+      }));
       await sendCommand(CameraCommands.setFocusAssist(method, color));
     },
     setProgramReturnTimeout: async (timeout: number) => {
@@ -902,7 +1018,7 @@ export function useBleCamera() {
       dimensionCode: number,
       interlaced: boolean,
       width?: number,
-      height?: number,
+      height?: number
     ) => {
       const clampInt16 = (value: number) => {
         if (Number.isNaN(value)) return 0;
@@ -940,15 +1056,17 @@ export function useBleCamera() {
         dimensionCode,
         interlaced,
       });
-      await sendCommand(CameraCommands.setVideoMode(frameRate, mRate, dimensionCode, interlaced));
+      await sendCommand(
+        CameraCommands.setVideoMode(frameRate, mRate, dimensionCode, interlaced)
+      );
       await sendCommand(
         CameraCommands.setRecordingFormat(
           frameRate,
           sensorFrameRate,
           widthToSend,
           heightToSend,
-          flags,
-        ),
+          flags
+        )
       );
     },
     setSensorWindowed: async (enabled: boolean) => {
@@ -971,12 +1089,16 @@ export function useBleCamera() {
           state.offSpeedFrameRate,
           state.videoWidth,
           state.videoHeight,
-          flags,
-        ),
+          flags
+        )
       );
     },
     setNDFilter: async (stop: number, displayModeIndex: number) => {
-      setState((prev) => ({ ...prev, ndStop: stop, ndDisplayModeIndex: displayModeIndex }));
+      setState((prev) => ({
+        ...prev,
+        ndStop: stop,
+        ndDisplayModeIndex: displayModeIndex,
+      }));
       await sendCommand(CameraCommands.setNDFilter(stop, displayModeIndex));
     },
     setRecording: async (active: boolean) => {
@@ -988,7 +1110,10 @@ export function useBleCamera() {
   useEffect(() => {
     return () => {
       const { incoming, status } = refs.current;
-      incoming?.removeEventListener("characteristicvaluechanged", handleIncoming);
+      incoming?.removeEventListener(
+        "characteristicvaluechanged",
+        handleIncoming
+      );
       status?.removeEventListener("characteristicvaluechanged", handleStatus);
       disconnect();
     };
