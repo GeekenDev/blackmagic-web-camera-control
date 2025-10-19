@@ -15,6 +15,18 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Camera Control - Blackmagic Controller",
   description: "Control your Blackmagic camera with ease",
+  icons: {
+    icon: [
+      { url: "/favicon.ico" },
+      { url: "/icon0.svg", type: "image/svg+xml" },
+      { url: "/icon1.png", sizes: "192x192" },
+    ],
+    apple: [{ url: "/apple-icon.png", sizes: "180x180" }],
+  },
+  manifest: "/manifest.json",
+  other: {
+    "apple-mobile-web-app-title": "Cam Control",
+  },
 };
 
 export default function RootLayout({
@@ -24,6 +36,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head />
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
         {children}
       </body>
